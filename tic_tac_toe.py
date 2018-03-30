@@ -1,7 +1,6 @@
 import random
 import pygame
 import numpy as np
-import model as ann
 from sklearn.utils.extmath import cartesian
 from config import *
 import time
@@ -11,7 +10,7 @@ small_font  = pygame.font.Font(None, 25)
 medium_font = pygame.font.Font(None, 30)
 large_font  = pygame.font.Font(None, 50)
 
-NB_EPISODES = 10000
+NB_EPISODES = 1000000
 DISPLAY_WIDTH = 800
 DISPLAY_HEIGHT = 600
 GRID_SIZE = 300
@@ -79,8 +78,8 @@ def start_game(p1, p2):
         env.games_played += 1
         print(env.games_played)
 
-    np.savetxt('p1_q.tbl.txt', current_player.q_table, fmt='%d')
-    np.savetxt('p2_q_tbl.txt', other_player.q_table, fmt='%d')
+    np.savetxt(current_player.name + "_q_tbl.txt", current_player.q_table, fmt='%f')
+    np.savetxt(other_player.name + "_q_tbl.txt", other_player.q_table, fmt='%f')
 
 
 def reset_game(env):
@@ -156,7 +155,7 @@ class Human:
                 continue
 
             print("You selected coordinates ({}, {})".format(row, col))
-            action = (int(col) - 1, int(row) - 1)
+            action = (int(row) - 1, int(col) - 1)
             if env.is_action_valid(state[0], action):
                 validated_action = True
             else:
@@ -174,7 +173,7 @@ class Human:
 
 
 class Agent:
-    def __init__(self, name, token, gamma=0.9, alpha=0.01, epsilon=0.9, decay=0.9, epsilon_min=0.1):
+    def __init__(self, name, token, gamma=0.9, alpha=0.01, epsilon=0.9, decay=0.99, epsilon_min=0.01):
         self.name = name
         self.token = token
         self.gamma = gamma
@@ -186,9 +185,12 @@ class Agent:
         self.memory = []
         self.q_table = np.full([3**9], 0.5, dtype=float)
 
+        if PRELOAD_AGENT:
+            self.q_table = np.loadtxt(SAVED_FILES['q_table'])
+
 
     def act(self, env, state):
-        if self.epsilon > np.random.rand():
+        if (self.epsilon > np.random.rand() or PURE_EPSILON) and TRAINING:
             validated_action = False
             while not validated_action:
                 action = np.random.randint(3, size=(2))
@@ -206,12 +208,14 @@ class Agent:
                         temp_state[row][col] = self.token
                         valid_actions.append([(row, col), temp_state])
 
+            if PRINT_DECISION_MATRIX:
+                self.print_decision_matrix(env, state[0])
+
             best_action = valid_actions[0]
             for action in valid_actions:
                 state_ind = env.get_state_index(action[1])
-                if self.q_table[state_ind] > env.get_state_index(best_action[1]):
+                if self.q_table[state_ind] > self.q_table[env.get_state_index(best_action[1])]:
                     best_action = action
-
 
         if self.epsilon > self.epsilon_min:
             self.epsilon *= self.decay
@@ -224,6 +228,8 @@ class Agent:
         self.memory.append([state, action, reward, winner, done, state_ind])
 
     def learn(self, state, action, reward, winner, done, state_ind):
+        if not TRAINING:
+            return
         if winner != self.token:
             reward = 0
         self.q_table[state_ind] = reward
@@ -231,9 +237,32 @@ class Agent:
         for state, action, reward, winner, done, state_ind in reversed(self.memory):
             self.q_table[state_ind] = self.q_table[state_ind] + self.alpha * (target - self.q_table[state_ind])
             target = self.q_table[state_ind]
+        self.forget()
 
     def forget(self):
         self.memory = []
+
+
+    def print_decision_matrix(self, env, state):
+        predictions = np.full((3, 3), -1, dtype=float)
+        for row in range(3):
+            for col in range(3):
+                temp_state = state.copy()
+                if env.is_action_valid(state, (row, col)):
+                    temp_state[row, col] = self.token
+                    predictions[row, col] = self.q_table[env.get_state_index(temp_state)]
+                else:
+                    predictions[row, col] = -1
+
+        print("________________")
+        print("| {} | {} | {} |".format(str(predictions[0, 0]), str(predictions[0, 1]), str(predictions[0, 2])))
+        print("|____|____|____|")
+        print("| {} | {} | {} |".format(str(predictions[1, 0]), str(predictions[1, 1]), str(predictions[1, 2])))
+        print("|____|____|____|")
+        print("| {} | {} | {} |".format(str(predictions[2, 0]), str(predictions[2, 1]), str(predictions[2, 2])))
+        print("|____|____|____|")
+
+
 
 
 class Env:
@@ -264,7 +293,7 @@ class Env:
 
     def update_env(self, action, agent):
         try:
-            self.board_tokens[action[1]][action[0]] = agent.token
+            self.board_tokens[action[0]][action[1]] = agent.token
         except TypeError:
             return self.board_tokens, 2, 3, 4
         state = self.board_tokens.copy()
@@ -352,7 +381,7 @@ class Env:
         return False
 
     def is_action_valid(self, state, action):
-        return state[action[1]][action[0]] == 0
+        return state[action[0]][action[1]] == 0
 
 
 def get_player(player, token):
